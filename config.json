@@ -1,0 +1,33 @@
+{
+  "db_clients": [
+    {
+      "dbname": "securetiles",
+      "host": "127.0.0.1",
+      "name": "securetiles",
+      "number_of_connections": 4,
+      "number_of_threads": 8,
+      "port": 5432,
+      "rdbms": "postgresql",
+      "timeout": 5,
+      "user": "worldmap_api"
+    }
+  ],
+  "listeners": [
+    {
+      "address": "127.0.0.1",
+      "port": 3000
+    }
+  ],
+  "plugins": [
+    {
+      "config": {
+	"login_subject": "auth.login.request",
+	"queue_group": "worldmap-api",
+	"server": "tls://10.50.0.2:4222",
+	"subject": "map.marker.create"
+      },
+      "dependencies": [],
+      "name": "NatsPlugin"
+    }
+  ]
+}
