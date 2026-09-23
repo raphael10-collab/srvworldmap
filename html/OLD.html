@@ -65,9 +65,9 @@
         
         const map = new maplibregl.Map({
             container: "map",
-            zoom: 6,
+            zoom: 12,
             center: [9.1538064, 45.4565458],
-        
+
             style: {
                 version: 8,
         
@@ -109,7 +109,32 @@
         
             canvasContextAttributes: {
                 antialias: true
+            },
+
+
+            transformRequest: function (url, resourceType) {
+                console.log("MapLibre request:", resourceType, url);
+        
+                if (url.includes("/api/restricted-tiles/")) {
+                    console.log("RESTRICTED TILE REQUEST:", url);
+        
+                    return {
+                        url: url,
+                        credentials: "include"
+                    };
+                }
+        
+                return {
+                    url: url
+                };
             }
+
+
+        });
+
+        map.on("error", function (event)
+        {
+            console.error("MAPLIBRE ERROR:", event.error || event);
         });
         
         function escapeHtml(value)
@@ -133,9 +158,21 @@
                     ],
                     minzoom: 0,
                     maxzoom: 22,
-                    promoteId: "id"
+                    //promoteId: "id"
                 });
             }
+
+            map.on("dataloading", function (event) {
+                if (event.sourceId === "restricted-tiles") {
+                    console.log("Restricted tile loading:", event);
+                }
+            });
+
+            map.on("data", function (event) {
+                if (event.sourceId === "restricted-tiles") {
+                    console.log("Restricted tile event:", event);
+                }
+            });
         
             if (!map.getLayer("restricted-features"))
             {
@@ -279,12 +316,6 @@
                 }
             );
 
-            //console.debug("Access status:", accessResponse.status);
-            //if (!accessResponse.ok)
-            //{
-                //throw new Error(`Access request failed: ${accessResponse.status}`);
-            //}
-        
             const access = await accessResponse.json();        
         
             if (access.authenticated !== true || access.authorized !== true)
@@ -354,10 +385,7 @@
             }
             catch (error)
             {
-                console.error(
-                    "Could not load restricted map data:",
-                    error
-                );
+                console.error("Could not load restricted map data:", error);
             }
         });
         
@@ -377,15 +405,17 @@
           }
         });
         
-        map.on("data", (event) => {
-          if (
-            event.sourceId === "restricted-tiles" &&
-            event.dataType === "source"
-          ) {
-            console.debug("Restricted tile source data received");
-          }
+        map.on("data", function (event) {
+            if (event.sourceId === "restricted-tiles") {
+                console.log("Restricted source event:", {
+                    dataType: event.dataType,
+                    sourceId: event.sourceId,
+                    isSourceLoaded: event.isSourceLoaded,
+                    tile: event.tile
+                });
+            }
         });
-        
+
         map.on("error", (event) => {
           console.error("MapLibre error:", event.error || event);
         });
