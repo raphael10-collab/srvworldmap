@@ -52,374 +52,411 @@
         <div id="map"></div>
 
 
-
         <script>
         const API_BASE_URL = "https://worldmap.grasp.deals";
         const PMTILES_URL = `${API_BASE_URL}/protomaps.pmtiles`;
         
-        const protocol = new pmtiles.Protocol();
-        maplibregl.addProtocol("pmtiles", protocol.tile);
+        const map = new maplibregl.Map({
+          container: "map",
+          zoom: 6,
+          center: [9.1538064, 45.4565458],
+        
+          style: {
+            version: 8,
+        
+            sources: {
+              example_source: {
+                type: "vector",
+                url: `pmtiles://${PMTILES_URL}`,
+                attribution:
+                  '© <a href="https://openstreetmap.org">OpenStreetMap</a>'
+              },
+        
+              osm: {
+                type: "raster",
+                tiles: [
+                  "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                ],
+                tileSize: 256
+              }
+            },
+        
+            layers: [
+              {
+                id: "osm",
+                type: "raster",
+                source: "osm"
+              },
+        
+              {
+                id: "example_layer",
+                type: "fill",
+                source: "example_source",
+                "source-layer": "buildings",
+                paint: {
+                  "fill-color": "#ff0000"
+                }
+              }
+            ]
+          },
+        
+          transformRequest: function (url, resourceType) {
+            console.debug("MapLibre request:", resourceType, url);
+        
+            if (
+              url.startsWith(`${API_BASE_URL}/api/`) ||
+              url.startsWith(`${API_BASE_URL}/protomaps.pmtiles`)
+            ) {
+              return {
+                url,
+                credentials: "include"
+              };
+            }
+        
+            return { url };
+          }
+        });
+        
+        const pmtilesProtocol = new pmtiles.Protocol();
+        maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
         
         const pmtilesArchive = new pmtiles.PMTiles(PMTILES_URL);
-        protocol.add(pmtilesArchive);
+        pmtilesProtocol.add(pmtilesArchive);
         
-        const map = new maplibregl.Map({
-            container: "map",
-            zoom: 12,
-            center: [9.1538064, 45.4565458],
+        function escapeHtml(value) {
+          return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        }
+        
+        function addRestrictedTileLayer() {
+          if (map.getSource("restricted-tiles")) {
+            return;
+          }
+        
+          map.addSource("restricted-tiles", {
+            type: "vector",
+        
+            tiles: [
+              `${API_BASE_URL}/api/restricted-tiles/{z}/{x}/{y}.pbf`
+            ],
+        
+            minzoom: 0,
+            maxzoom: 22,
+        
+            // Use this only if the vector-tile feature ID is available.
+            // promoteId: "id"
+          });
+        
+          map.addLayer({
+            id: "restricted-features",
+            type: "circle",
+            source: "restricted-tiles",
+            "source-layer": "restricted",
+        
+            paint: {
+              "circle-radius": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                0, 4,
+                8, 7,
+                14, 12
+              ],
+              "circle-color": "#0000ff",
+              "circle-opacity": 1,
+              "circle-stroke-color": "#ffffff",
+              "circle-stroke-width": 3
+            }
+          });
+        
+          map.on("sourcedata", event => {
+            if (
+              event.sourceId === "restricted-tiles" &&
+              event.isSourceLoaded
+            ) {
+              console.debug("Restricted tile source loaded");
+            }
+          });
+        
+          map.on("data", event => {
+            if (event.sourceId === "restricted-tiles") {
+              console.debug("Restricted tile data event:", {
+                dataType: event.dataType,
+                isSourceLoaded: event.isSourceLoaded,
+                tile: event.tile
+              });
+            }
+          });
+        
+          map.on("error", event => {
+            console.error(
+              "Restricted tile error:",
+              event.error || event
+            );
+          });
+        
+          addRestrictedTileInteraction();
+        }
+        
+        function addRestrictedTileInteraction() {
+          if (!map.getLayer("restricted-features")) {
+            return;
+          }
+        
+          map.on("mouseenter", "restricted-features", () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+        
+          map.on("mouseleave", "restricted-features", () => {
+            map.getCanvas().style.cursor = "";
+          });
+        
+          map.on("click", "restricted-features", event => {
+            const feature = event.features?.[0];
+        
+            if (!feature) {
+              return;
+            }
+        
+            const properties = feature.properties || {};
+        
+            let title = properties.name || "Restricted marker";
+            let description = properties.description || "";
+        
+            if (typeof properties.properties === "string") {
+              try {
+                const nested = JSON.parse(properties.properties);
+        
+                if (nested.name) {
+                  title = nested.name;
+                }
+        
+                if (nested.description) {
+                  description = nested.description;
+                }
+              } catch (error) {
+                console.warn("Could not parse nested feature properties:", error);
+              }
+            }
+        
+            new maplibregl.Popup()
+              .setLngLat(event.lngLat)
+              .setHTML(`
+                <strong>${escapeHtml(title)}</strong>
+                <p>${escapeHtml(description)}</p>
+              `)
+              .addTo(map);
+          });
+        }
 
-            style: {
-                version: 8,
+
+        function addRestrictedMarkers(markerGeoJson) {
+          if (!markerGeoJson || markerGeoJson.type !== "FeatureCollection") {
+            throw new Error("Invalid marker GeoJSON response");
+          }
         
-                sources: {
-                    example_source: {
-                        type: "vector",
-                        url: `pmtiles://${PMTILES_URL}`,
-                        attribution:
-                            '© <a href="https://openstreetmap.org">OpenStreetMap</a>'
-                    },
+          if (!Array.isArray(markerGeoJson.features)) {
+            throw new Error("GeoJSON features must be an array");
+          }
         
-                    osm: {
-                        type: "raster",
-                        tiles: [
-                            "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                        ],
-                        tileSize: 256
-                    }
-                },
+          console.debug(
+            "Number of restricted markers:",
+            markerGeoJson.features.length
+          );
         
-                layers: [
-                    {
-                        id: "osm",
-                        type: "raster",
-                        source: "osm"
-                    },
+          if (map.getLayer("restricted-markers-layer")) {
+            map.removeLayer("restricted-markers-layer");
+          }
         
-                    {
-                        id: "example_layer",
-                        type: "fill",
-                        source: "example_source",
-                        "source-layer": "buildings",
-                        paint: {
-                            "fill-color": "red"
-                        }
-                    }
-                ]
+          if (map.getSource("restricted-markers")) {
+            map.removeSource("restricted-markers");
+          }
+        
+          map.addSource("restricted-markers", {
+            type: "geojson",
+            data: markerGeoJson
+          });
+        
+          map.addLayer({
+            id: "restricted-markers-layer",
+            type: "circle",
+            source: "restricted-markers",
+            layout: {
+              visibility: "visible"
             },
-        
-            canvasContextAttributes: {
-                antialias: true
-            },
-
-
-            transformRequest: function (url, resourceType) {
-                console.log("MapLibre request:", resourceType, url);
-        
-                if (url.includes("/api/restricted-tiles/")) {
-                    console.log("RESTRICTED TILE REQUEST:", url);
-        
-                    return {
-                        url: url,
-                        credentials: "include"
-                    };
-                }
-        
-                return {
-                    url: url
-                };
+            paint: {
+              "circle-radius": 14,
+              "circle-color": "#ff0000",
+              "circle-opacity": 1,
+              "circle-stroke-color": "#ffffff",
+              "circle-stroke-width": 4
             }
-
-
-        });
-
-        map.on("error", function (event)
-        {
-            console.error("MAPLIBRE ERROR:", event.error || event);
-        });
+          });
         
-        function escapeHtml(value)
-        {
-            return String(value)
-                .replaceAll("&", "&amp;")
-                .replaceAll("<", "&lt;")
-                .replaceAll(">", "&gt;")
-                .replaceAll('"', "&quot;")
-                .replaceAll("'", "&#039;");
+          console.debug(
+            "Marker layer exists:",
+            Boolean(map.getLayer("restricted-markers-layer"))
+          );
+        
+          map.on("mouseenter", "restricted-markers-layer", () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+        
+          map.on("mouseleave", "restricted-markers-layer", () => {
+            map.getCanvas().style.cursor = "";
+          });
+        
+          map.on("click", "restricted-markers-layer", event => {
+            const feature = event.features?.[0];
+        
+            if (!feature) {
+              return;
+            }
+        
+            const properties = feature.properties || {};
+        
+            new maplibregl.Popup()
+              .setLngLat(event.lngLat)
+              .setHTML(`
+                <strong>${escapeHtml(properties.name || "Restricted marker")}</strong>
+                <p>${escapeHtml(properties.description || "")}</p>
+              `)
+              .addTo(map);
+          });
+        }
+
+
+        
+        async function fetchAccessStatus() {
+          const response = await fetch(
+            `${API_BASE_URL}/api/auth/access`,
+            {
+              method: "GET",
+              credentials: "include",
+              headers: {
+                Accept: "application/json"
+              },
+              cache: "no-store"
+            }
+          );
+        
+          if (!response.ok) {
+            throw new Error(
+              `Access request failed: HTTP ${response.status}`
+            );
+          }
+        
+          const access = await response.json();
+        
+          console.debug("Restricted-map access response:", access);
+        
+          return access;
         }
         
-        function addRestrictedTileLayer()
-        {
-            if (!map.getSource("restricted-tiles"))
-            {
-                map.addSource("restricted-tiles", {
-                    type: "vector",
-                    tiles: [
-                        `${API_BASE_URL}/api/restricted-tiles/{z}/{x}/{y}.pbf`
-                    ],
-                    minzoom: 0,
-                    maxzoom: 22,
-                    //promoteId: "id"
-                });
-            }
 
-            map.on("dataloading", function (event) {
-                if (event.sourceId === "restricted-tiles") {
-                    console.log("Restricted tile loading:", event);
-                }
-            });
-
-            map.on("data", function (event) {
-                if (event.sourceId === "restricted-tiles") {
-                    console.log("Restricted tile event:", event);
-                }
-            });
-        
-            if (!map.getLayer("restricted-features"))
-            {
-                map.addLayer({
-                    id: "restricted-features",
-                    type: "circle",
-                    source: "restricted-tiles",
-                    "source-layer": "restricted",
-        
-                    paint: {
-                        //"circle-radius": [
-                            //"interpolate",
-                            //["linear"],
-                            //["zoom"],
-                            //0, 5,
-                            //8, 7,
-                            //14, 12
-                        //],
-                        "circle-radius": 25,
-                        "circle-color": "#0000ff",
-                        "circle-opacity": 1,
-                        "circle-stroke-color": "#ffffff",
-                        "circle-stroke-width": 4
-                    }
-                });
-            }
-        
-            addRestrictedMarkerInteraction();
-        }
-        
-        function addRestrictedMarkerInteraction()
+        async function loadRestrictedMarkers()
         {
-            if (!map.getLayer("restricted-features"))
+            const url = `${API_BASE_URL}/api/restricted-markers`;
+        
+            console.debug("Requesting restricted markers:", url);
+        
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => {
+                controller.abort();
+            }, 10000);
+        
+            try
             {
-                return;
-            }
-        
-            map.on("mouseenter", "restricted-features", () => {
-                map.getCanvas().style.cursor = "pointer";
-            });
-        
-            map.on("mouseleave", "restricted-features", () => {
-                map.getCanvas().style.cursor = "";
-            });
-        
-            map.on("click", "restricted-features", (event) => {
-                const feature = event.features?.[0];
-        
-                if (!feature)
-                {
-                    return;
-                }
-        
-                const properties = feature.properties || {};
-        
-                let description = properties.description || "";
-        
-                try
-                {
-                    const parsedProperties =
-                        typeof properties.properties === "string"
-                            ? JSON.parse(properties.properties)
-                            : properties.properties;
-        
-                    if (parsedProperties?.description)
-                    {
-                        description = parsedProperties.description;
-                    }
-                }
-                catch
-                {
-                    // Retain the original description.
-                }
-        
-                const title = properties.name || "Restricted marker";
-        
-                new maplibregl.Popup()
-                    .setLngLat(event.lngLat)
-                    .setHTML(`
-                        <strong>${escapeHtml(title)}</strong>
-                        <p>${escapeHtml(description)}</p>
-                    `)
-                    .addTo(map);
-            });
-        }
-        
-        function addRestrictedMarkers(markerGeoJson)
-        {
-            if (!markerGeoJson ||
-                markerGeoJson.type !== "FeatureCollection")
-            {
-                throw new Error("Invalid marker GeoJSON response");
-            }
-        
-            if (map.getSource("restricted-markers"))
-            {
-                map.getSource("restricted-markers")
-                    .setData(markerGeoJson);
-        
-                return;
-            }
-        
-            map.addSource("restricted-markers", {
-                type: "geojson",
-                data: markerGeoJson
-            });
-        
-            map.addLayer({
-                id: "restricted-markers-layer",
-                type: "circle",
-                source: "restricted-markers",
-        
-                paint: {
-                    "circle-radius": [
-                        "interpolate",
-                        ["linear"],
-                        ["zoom"],
-                        0, 4,
-                        8, 6,
-                        14, 10
-                    ],
-                    "circle-color": "#ff0000",
-                    "circle-opacity": 0.9,
-                    "circle-stroke-color": "#ffffff",
-                    "circle-stroke-width": 2
-                }
-            });
-        }
-        
-        async function loadRestrictedMapData()
-        {
-            const accessResponse = await fetch(
-                `${API_BASE_URL}/api/auth/access`,
-                {
+                const response = await fetch(url, {
                     method: "GET",
                     credentials: "include",
                     headers: {
                         Accept: "application/json"
                     },
-                    cache: "no-store"
-                }
-            );
-
-            const access = await accessResponse.json();        
-        
-            if (access.authenticated !== true || access.authorized !== true)
-            {
-                console.info("Restricted-map access denied:", access);
-                return;
-            }
-
-            addRestrictedTileLayer();
-
-            map.once("idle", function () {
-                const renderedFeatures = map.queryRenderedFeatures({
-                    layers: ["restricted-features"]
+                    cache: "no-store",
+                    signal: controller.signal
                 });
-            
-                console.log(
-                    "Rendered restricted features:",
-                    renderedFeatures.length,
-                    renderedFeatures
-                );
-            });
-
-            map.flyTo({
-                center: [9.1538, 45.4565],
-                zoom: 12
-            });
         
-            const markerResponse = await fetch(
-                `${API_BASE_URL}/api/restricted-markers`,
+                console.debug("Restricted marker response:", response.status, response.headers.get("content-type"));
+        
+                if (!response.ok)
                 {
-                    method: "GET",
-                    credentials: "include",
-                    headers: {
-                        Accept: "application/geo+json, application/json"
-                    },
-                    cache: "no-store"
+                    const body = await response.text();
+                    throw new Error(`Marker request failed: HTTP ${response.status}; body=${body}`);
                 }
-            );
         
-            if (!markerResponse.ok)
-            {
-                throw new Error(
-                    `Marker request failed: ${markerResponse.status}`
-                );
-            }
-        
-            const markerGeoJson = await markerResponse.json();
-            addRestrictedMarkers(markerGeoJson);
+                const markerGeoJson = await response.json();
+                console.debug("Restricted marker GeoJSON:", markerGeoJson);
 
-            map.once("idle", () => {
-              const rendered = map.queryRenderedFeatures({
-                layers: ["restricted-features"]
-              });
-          
-              console.debug(
-                "Rendered restricted features:",
-                rendered.length,
-                rendered
-              );
-            });
-        }
-        
-        map.on("load", async () => {
-            try
-            {
-                await loadRestrictedMapData();
+                addRestrictedMarkers(markerGeoJson);
             }
             catch (error)
             {
-                console.error("Could not load restricted map data:", error);
+                if (error.name === "AbortError")
+                {
+                    console.error("Restricted marker request timed out after 10 seconds:", url);
+                }
+                else
+                {
+                    console.error("Restricted marker request failed:", error);
+                }
+                throw error;
             }
-        });
+            finally
+            {
+                clearTimeout(timeoutId);
+            }
+        }
         
-        map.on("error", (event) => {
+
+        async function loadRestrictedMapData()
+        {
+            const access = await fetchAccessStatus();
+        
+            if (access.authenticated !== true || access.authorized !== true)
+            {
+                console.warn("Restricted map access denied:", access);
+                return;
+            }
+        
+            //addRestrictedTileLayer();
+        
+            await loadRestrictedMarkers();
+        
+            map.jumpTo({
+                center: [9.1538064, 45.4565458],
+                zoom: 6
+            });
+        
+            map.once("idle", () => {
+                const tileFeatures = map.queryRenderedFeatures({
+                    layers: ["restricted-features"]
+                });
+        
+                const markerFeatures = map.queryRenderedFeatures({
+                    layers: ["restricted-markers-layer"]
+                });
+        
+                console.debug("Rendered restricted tile features:", tileFeatures.length, tileFeatures);
+                console.debug("Rendered restricted marker features:", markerFeatures.length, markerFeatures);
+            });
+        }
+
+       
+        map.on("load", async () => {
+          try {
+            await loadRestrictedMapData();
+          } catch (error) {
             console.error(
-                "MapLibre error:",
-                event.error || event
+              "Could not load restricted map data:",
+              error
             );
-        });
-        
-        map.on("sourcedata", (event) => {
-          if (
-            event.sourceId === "restricted-tiles" &&
-            event.isSourceLoaded
-          ) {
-            console.debug("Restricted tile source loaded");
           }
         });
-        
-        map.on("data", function (event) {
-            if (event.sourceId === "restricted-tiles") {
-                console.log("Restricted source event:", {
-                    dataType: event.dataType,
-                    sourceId: event.sourceId,
-                    isSourceLoaded: event.isSourceLoaded,
-                    tile: event.tile
-                });
-            }
-        });
-
-        map.on("error", (event) => {
-          console.error("MapLibre error:", event.error || event);
-        });
-
         </script>
 
 

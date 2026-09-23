@@ -58,7 +58,7 @@
         
         const map = new maplibregl.Map({
           container: "map",
-          zoom: 6,
+          zoom: 8,
           center: [9.1538064, 45.4565458],
         
           style: {
@@ -429,7 +429,7 @@
         
             map.jumpTo({
                 center: [9.1538064, 45.4565458],
-                zoom: 6
+                zoom: 14
             });
         
             map.once("idle", () => {
