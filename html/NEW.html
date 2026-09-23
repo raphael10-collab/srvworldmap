@@ -10,7 +10,7 @@
                 margin: 0;
             }
             #map {
-                height:100%; width:100%;
+                height:100%; width:100%; min-height: 500px;
             }
 
             .map-overlay {
@@ -58,7 +58,7 @@
         
         const map = new maplibregl.Map({
           container: "map",
-          zoom: 6,
+          zoom: 10,
           center: [9.1538064, 45.4565458],
         
           style: {
@@ -99,7 +99,7 @@
               }
             ]
           },
-        
+
           transformRequest: function (url, resourceType) {
             console.debug("MapLibre request:", resourceType, url);
         
@@ -155,20 +155,21 @@
             id: "restricted-features",
             type: "circle",
             source: "restricted-tiles",
-            "source-layer": "restricted",
+            "source-layer": "restricted_tiles",
         
             paint: {
-              "circle-radius": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                0, 4,
-                8, 7,
-                14, 12
-              ],
+              //"circle-radius": [
+                //"interpolate",
+                //["linear"],
+                //["zoom"],
+                //0, 4,
+                //8, 7,
+                //14, 12
+              //],
+              "circle-radius": 48,
               "circle-color": "#0000ff",
               "circle-opacity": 1,
-              "circle-stroke-color": "#ffffff",
+              "circle-stroke-color": "#0000ff",
               "circle-stroke-width": 3
             }
           });
@@ -254,6 +255,52 @@
         }
 
 
+        function addRestrictedDomMarkers(markerGeoJson) {
+          for (const feature of markerGeoJson.features) {
+            if (
+              !feature.geometry ||
+              feature.geometry.type !== "Point"
+            ) {
+              continue;
+            }
+        
+            const [longitude, latitude] = feature.geometry.coordinates;
+            const properties = feature.properties || {};
+        
+            const element = document.createElement("div");
+        
+            element.style.width = "28px";
+            element.style.height = "28px";
+            element.style.backgroundColor = "#ff0000";
+            element.style.border = "4px solid white";
+            element.style.borderRadius = "50%";
+            element.style.boxSizing = "border-box";
+            element.style.cursor = "pointer";
+            element.style.boxShadow = "0 0 0 2px rgba(0, 0, 0, 0.35)";
+            element.style.zIndex = "9999";
+        
+            element.addEventListener("click", event => {
+              event.stopPropagation();
+        
+              new maplibregl.Popup()
+                .setLngLat([longitude, latitude])
+                .setHTML(`
+                  <strong>${escapeHtml(properties.name || "Restricted marker")}</strong>
+                  <p>${escapeHtml(properties.description || "")}</p>
+                `)
+                .addTo(map);
+            });
+        
+            new maplibregl.Marker({
+              element: element,
+              anchor: "center"
+            })
+              .setLngLat([longitude, latitude])
+              .addTo(map);
+          }
+        }
+
+
         function addRestrictedMarkers(markerGeoJson) {
           if (!markerGeoJson || markerGeoJson.type !== "FeatureCollection") {
             throw new Error("Invalid marker GeoJSON response");
@@ -263,61 +310,131 @@
             throw new Error("GeoJSON features must be an array");
           }
         
-          console.debug(
-            "Number of restricted markers:",
-            markerGeoJson.features.length
-          );
+          const sourceId = "restricted-markers";
+          const layerId = "restricted-markers-layer";
         
-          if (map.getLayer("restricted-markers-layer")) {
-            map.removeLayer("restricted-markers-layer");
+          if (map.getLayer(layerId)) {
+            map.removeLayer(layerId);
           }
         
-          if (map.getSource("restricted-markers")) {
-            map.removeSource("restricted-markers");
+          if (map.getSource(sourceId)) {
+            map.removeSource(sourceId);
           }
         
-          map.addSource("restricted-markers", {
+          map.addSource(sourceId, {
             type: "geojson",
             data: markerGeoJson
           });
         
           map.addLayer({
-            id: "restricted-markers-layer",
+            id: layerId,
             type: "circle",
-            source: "restricted-markers",
+            source: sourceId,
             layout: {
               visibility: "visible"
             },
             paint: {
-              "circle-radius": 14,
+              "circle-radius": 18,
               "circle-color": "#ff0000",
               "circle-opacity": 1,
               "circle-stroke-color": "#ffffff",
-              "circle-stroke-width": 4
+              "circle-stroke-width": 5
             }
           });
+
+          map.on("error", event => {
+              console.error("MapLibre error:", event.error || event);
+          });
+          
+          map.on("sourcedata", event => {
+              if (event.sourceId === "restricted-markers") {
+                  console.log("Marker source event:", {
+                      sourceId: event.sourceId,
+                      sourceDataType: event.sourceDataType,
+                      isSourceLoaded: event.isSourceLoaded
+                  });
+              }
+          });
+          
+          map.once("idle", () => {
+              console.log("Marker source loaded:", map.isSourceLoaded("restricted-markers"));
+              console.log("Features from source:",map.querySourceFeatures("restricted-markers"));
+              console.log("Features rendered in marker layer:",
+                  map.queryRenderedFeatures({
+                      layers: ["restricted-markers-layer"]
+                  })
+              );
+          
+              console.log("Canvas size:", {
+                  width: map.getCanvas().width,
+                  height: map.getCanvas().height
+              });
+
+              if (map.getLayer("restricted-markers-layer"))
+              {
+                  map.setPaintProperty("restricted-markers-layer", "circle-radius", 40);
+                  map.setPaintProperty("restricted-markers-layer", "circle-color", "#00ff00");
+                  map.setPaintProperty("restricted-markers-layer", "circle-opacity", 1);
+                  map.setPaintProperty("restricted-markers-layer", "circle-stroke-width", 8);
+
+                  map.moveLayer("restricted-markers-layer");
+              }
+              map.triggerRepaint();
+
+          });
+
+          // Ensure the marker is above every existing layer.
+          map.moveLayer(layerId);
         
-          console.debug(
-            "Marker layer exists:",
-            Boolean(map.getLayer("restricted-markers-layer"))
-          );
+          const feature = markerGeoJson.features[0];
         
-          map.on("mouseenter", "restricted-markers-layer", () => {
+          if (
+            feature &&
+            feature.geometry &&
+            feature.geometry.type === "Point"
+          ) {
+            const [longitude, latitude] = feature.geometry.coordinates;
+        
+            console.log("Moving map to marker:", longitude, latitude);
+        
+            //map.flyTo({
+              //center: [longitude, latitude],
+              //zoom: 14,
+              //essential: true
+            //});
+          }
+        
+          console.log("Marker source:", map.getSource(sourceId));
+          console.log("Marker layer:", map.getLayer(layerId));
+        
+          map.once("idle", () => {
+            const renderedFeatures = map.queryRenderedFeatures(undefined, {
+              layers: [layerId]
+            });
+        
+            console.log(
+              "Rendered restricted markers:",
+              renderedFeatures.length,
+              renderedFeatures
+            );
+          });
+        
+          map.on("mouseenter", layerId, () => {
             map.getCanvas().style.cursor = "pointer";
           });
         
-          map.on("mouseleave", "restricted-markers-layer", () => {
+          map.on("mouseleave", layerId, () => {
             map.getCanvas().style.cursor = "";
           });
         
-          map.on("click", "restricted-markers-layer", event => {
-            const feature = event.features?.[0];
+          map.on("click", layerId, event => {
+            const clickedFeature = event.features?.[0];
         
-            if (!feature) {
+            if (!clickedFeature) {
               return;
             }
         
-            const properties = feature.properties || {};
+            const properties = clickedFeature.properties || {};
         
             new maplibregl.Popup()
               .setLngLat(event.lngLat)
@@ -328,7 +445,6 @@
               .addTo(map);
           });
         }
-
 
         
         async function fetchAccessStatus() {
@@ -393,6 +509,13 @@
                 console.debug("Restricted marker GeoJSON:", markerGeoJson);
 
                 addRestrictedMarkers(markerGeoJson);
+                addRestrictedDomMarkers(markerGeoJson);
+
+                console.log("Map center:", map.getCenter());
+                console.log("Map zoom:", map.getZoom());
+                console.log("Map bounds:", map.getBounds());
+                console.log("Marker layer exists:", Boolean(map.getLayer("restricted-markers-layer")));
+                console.log("Marker source exists:", Boolean(map.getSource("restricted-markers")));
             }
             catch (error)
             {
@@ -429,7 +552,7 @@
         
             map.jumpTo({
                 center: [9.1538064, 45.4565458],
-                zoom: 6
+                zoom: 14
             });
         
             map.once("idle", () => {
