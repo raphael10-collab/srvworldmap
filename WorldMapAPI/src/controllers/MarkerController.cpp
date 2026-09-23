@@ -107,7 +107,6 @@ void MarkerController::createMarker(const drogon::HttpRequestPtr& request, std::
             responseBody["message"] = "Marker command published";
 
             auto response = drogon::HttpResponse::newHttpJsonResponse(responseBody);
-
             response->setStatusCode(drogon::k202Accepted);
             callback(response);
             return;

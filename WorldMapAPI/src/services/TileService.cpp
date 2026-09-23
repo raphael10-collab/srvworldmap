@@ -4,6 +4,46 @@
 #include <stdexcept>
 #include <vector>
 
+static int hexValue(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static std::string decodeHex(const std::string& input)
+{
+    if (input.empty())
+    {
+        return {};
+    }
+
+    if (input.size() % 2 != 0)
+    {
+        throw std::runtime_error("Invalid hexadecimal tile data");
+    }
+
+    std::string output;
+    output.reserve(input.size() / 2);
+
+    for (std::size_t i = 0; i < input.size(); i += 2)
+    {
+        const int high = hexValue(input[i]);
+        const int low = hexValue(input[i + 1]);
+
+        if (high < 0 || low < 0)
+        {
+            throw std::runtime_error("Invalid hexadecimal tile data");
+        }
+
+        output.push_back(static_cast<char>((high << 4) | low));
+    }
+
+    return output;
+}
+
+
 static std::string decodeBase64(const std::string& input)
 {
     if (input.empty())
@@ -59,49 +99,34 @@ bool TileService::validTileCoordinate(int z, int x, int y)
            y < limit;
 }
 
-void TileService::getRestrictedTile(
-    std::int64_t userId,
-    int z,
-    int x,
-    int y,
-    TileCallback&& callback)
+void TileService::getRestrictedTile(std::int64_t userId, int z, int x, int y, TileCallback&& callback)
 {
-    auto callbackHolder =
-        std::make_shared<TileCallback>(std::move(callback));
+    auto callbackHolder = std::make_shared<TileCallback>(std::move(callback));
 
     if (userId <= 0) {
-        (*callbackHolder)(
-            false,
-            {},
-            "Invalid authenticated user");
+        (*callbackHolder)(false, {}, "Invalid authenticated user");
         return;
     }
 
-    if (!validTileCoordinate(z, x, y)) {
-        (*callbackHolder)(
-            false,
-            {},
-            "Invalid tile coordinate");
+    if (!validTileCoordinate(z, x, y))
+    {
+        (*callbackHolder)(false, {}, "Invalid tile coordinate");
         return;
     }
 
     auto db = drogon::app().getDbClient("securetiles");
 
-    if (!db) {
-        (*callbackHolder)(
-            false,
-            {},
-            "Database is unavailable");
+    if (!db)
+    {
+        (*callbackHolder)(false, {}, "Database is unavailable");
         return;
     }
 
     static const std::string sql = R"SQL(
-    WITH tile AS (
-        SELECT ST_TileEnvelope($2, $3, $4) AS bounds
-    ),
-    mvt AS (
-        SELECT ST_AsMVT(features, 'restricted', 4096, 'geom') AS tile
-        FROM (
+        WITH tile AS (
+            SELECT ST_TileEnvelope($2, $3, $4) AS bounds
+        ),
+        features AS (
             SELECT
                 rf.id,
                 rf.name,
@@ -117,62 +142,56 @@ void TileService::getRestrictedTile(
             CROSS JOIN tile
             WHERE rf.owner_user_id = $1
               AND rf.geom_3857 && tile.bounds
-              AND ST_Intersects(rf.geom_3857, tile.bounds)
-        ) AS features
-    )
-    SELECT encode(COALESCE(tile, ''::bytea), 'base64') AS tile
-    FROM mvt
+        )
+        SELECT encode(
+            COALESCE(
+                ST_AsMVT(features, 'restricted', 4096, 'geom'),
+                ''::bytea
+            ),
+            'hex'
+        ) AS tile
+        FROM features;
     )SQL";
-
 
     db->execSqlAsync(
         sql,
 
-        [callbackHolder](
-            const drogon::orm::Result& result)
+        [callbackHolder](const drogon::orm::Result& result)
         {
-            if (result.empty()) {
-                (*callbackHolder)(
-                    false,
-                    {},
-                    "Tile query returned no result");
+            if (result.empty())
+            {
+                (*callbackHolder)(false, {}, "Tile query returned no result");
                 return;
             }
 
             const auto& field = result[0]["tile"];
 
-            if (field.isNull()) {
+            if (field.isNull())
+            {
                 (*callbackHolder)(true, {}, {});
                 return;
             }
 
-            std::string encodedTile = field.as<std::string>();
-            std::string tileData;
             try
             {
-                tileData = decodeBase64(encodedTile);
+                const std::string encodedTile = field.as<std::string>();
+                std::string tileData = decodeHex(encodedTile);
+                LOG_INFO << "MVT tile size: " << tileData.size();
+                (*callbackHolder)(true, std::move(tileData), {});
             }
             catch (const std::exception& error)
             {
-                LOG_ERROR << "Could not decode MVT Base64: " << error.what();
+                LOG_ERROR << "Could not decode MVT hex: " << error.what();
                 (*callbackHolder)(false, {}, "Invalid encoded tile data");
-                return;
             }
-            LOG_INFO << "MVT tile size: " << tileData.size();
-            (*callbackHolder)(true, std::move(tileData), {});
+
         },
 
-        [callbackHolder](
-            const drogon::orm::DrogonDbException& error)
+        [callbackHolder](const drogon::orm::DrogonDbException& error)
         {
-            LOG_ERROR
-                << "Tile query failed: "
-                << error.base().what();
+            LOG_ERROR << "Tile query failed: " << error.base().what();
 
-            (*callbackHolder)(
-                false,
-                {},
-                "Tile query failed");
+            (*callbackHolder)(false, {}, "Tile query failed");
         },
 
         userId,
